@@ -1,11 +1,10 @@
-# main.py
-
 import numpy as np
 from scipy import stats
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Dict, List
 import warnings
+import seaborn as sns
 
 class ABTestAnalyzer:
     """A comprehensive tool for analyzing AB test results."""
@@ -114,72 +113,129 @@ class ABTestAnalyzer:
             
         return results
     
-    def create_visualizations(self) -> None:
-        """Create and save visualizations for the analysis."""
-        # Set some nice default parameters
+    def create_enhanced_visualizations(self) -> None:
+        """Create enhanced visualizations with confidence intervals and error bars."""
         plt.rcParams['figure.figsize'] = [12, 6]
         plt.rcParams['font.size'] = 10
         plt.rcParams['axes.titlesize'] = 12
         plt.rcParams['axes.labelsize'] = 10
         
-        # Define colors
+        results = self.run_full_analysis()
+        
+        # Colors
         control_color = '#1f77b4'  # Blue
         treatment_color = '#2ca02c'  # Green
         
-        # Create visualizations for each metric
         for metric in self.metrics:
-            # Create figure with two subplots
-            fig, (ax1, ax2) = plt.subplots(1, 2)
+            # 1. Distribution and CI Plot
+            fig = plt.figure(figsize=(15, 10))
+            gs = plt.GridSpec(2, 2)
+            
+            # Distribution Plot
+            ax1 = fig.add_subplot(gs[0, :])
+            ax2 = fig.add_subplot(gs[1, 0])
+            ax3 = fig.add_subplot(gs[1, 1])
+            
             fig.suptitle(f'{metric.replace("_", " ").title()} Analysis', fontsize=14)
             
-            # Subplot 1: Histograms
-            ax1.hist(self.control[metric], alpha=0.5, label='Control', 
-                    color=control_color, bins=30, density=True)
-            ax1.hist(self.treatment[metric], alpha=0.5, label='Treatment', 
-                    color=treatment_color, bins=30, density=True)
-            ax1.set_title('Distribution Comparison')
+            # Distribution with confidence intervals
+            sns.kdeplot(data=self.control[metric], ax=ax1, color=control_color, 
+                       label='Control', fill=True, alpha=0.3)
+            sns.kdeplot(data=self.treatment[metric], ax=ax1, color=treatment_color, 
+                       label='Treatment', fill=True, alpha=0.3)
+            
+            # Add mean lines with CI bands
+            control_ci = results[metric]['confidence_intervals']
+            
+            ax1.axvline(np.mean(self.control[metric]), color=control_color, 
+                       linestyle='--', alpha=0.8)
+            ax1.axvline(np.mean(self.treatment[metric]), color=treatment_color, 
+                       linestyle='--', alpha=0.8)
+            
+            ax1.set_title('Distribution Comparison with Means')
             ax1.set_xlabel('Value')
             ax1.set_ylabel('Density')
             ax1.legend()
             
-            # Subplot 2: Box Plots
+            # Box Plot with Mean Points
             bp = ax2.boxplot([self.control[metric], self.treatment[metric]], 
-                           labels=['Control', 'Treatment'], patch_artist=True)
+                            labels=['Control', 'Treatment'], patch_artist=True)
             
-            # Color the boxes
+            # Color boxes
             bp['boxes'][0].set_facecolor(control_color)
             bp['boxes'][1].set_facecolor(treatment_color)
             for box in bp['boxes']:
                 box.set_alpha(0.5)
             
-            ax2.set_title('Box Plot Comparison')
-            ax2.set_ylabel('Value')
+            # Add mean points with error bars
+            control_stats = results[metric]['basic_stats']['control']
+            treatment_stats = results[metric]['basic_stats']['treatment']
             
-            # Add means as points
-            ax2.plot([1], [np.mean(self.control[metric])], 'o', 
-                    color=control_color, label='Control Mean')
-            ax2.plot([2], [np.mean(self.treatment[metric])], 'o', 
-                    color=treatment_color, label='Treatment Mean')
+            ax2.errorbar([1], [control_stats['mean']], 
+                        yerr=control_stats['std']/np.sqrt(control_stats['sample_size']),
+                        fmt='o', color=control_color, capsize=5, label='Mean with SE')
+            ax2.errorbar([2], [treatment_stats['mean']], 
+                        yerr=treatment_stats['std']/np.sqrt(treatment_stats['sample_size']),
+                        fmt='o', color=treatment_color, capsize=5)
+            
+            ax2.set_title('Box Plot with Mean and Standard Error')
             ax2.legend()
             
-            # Adjust layout and save
+            # Relative Difference Plot
+            diff_data = results[metric]['confidence_intervals']
+            
+            # Create bar for relative difference
+            rel_diff = diff_data['relative_difference'] * 100  # Convert to percentage
+            ax3.bar(['Relative Difference'], [rel_diff], 
+                    yerr=[abs(rel_diff - diff_data['ci_lower']*100)], 
+                    capsize=5, color='lightblue', alpha=0.6)
+            
+            # Add horizontal line at 0
+            ax3.axhline(y=0, color='black', linestyle='-', alpha=0.2)
+            
+            # Add confidence interval band
+            ax3.fill_between([-.25, .25], 
+                            diff_data['ci_lower']*100, 
+                            diff_data['ci_upper']*100, 
+                            color='gray', alpha=0.2)
+            
+            ax3.set_title('Relative Difference with 95% CI')
+            ax3.set_ylabel('Percentage Difference (%)')
+            
+            # Add p-value and effect size annotations
+            p_value = results[metric]['hypothesis_test']['t_test']['p_value']
+            effect_size = results[metric]['effect_size']['cohens_d']
+            power = results[metric]['power_analysis']['observed_power']
+            
+            ax3.text(.5, .95, f'p-value: {p_value:.4f}\nEffect Size (d): {effect_size:.3f}\nPower: {power:.2f}', 
+                    transform=ax3.transAxes, verticalalignment='top')
+            
             plt.tight_layout()
-            plt.savefig(f'{metric}_analysis.png', dpi=300, bbox_inches='tight')
+            plt.savefig(f'{metric}_enhanced_analysis.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # Create effect size visualization
-        results = self.run_full_analysis()
+        # Create Enhanced Effect Size Comparison
+        plt.figure(figsize=(12, 6))
+        
+        # Prepare data
         effect_sizes = []
+        effect_errors = []
         metrics_list = []
         
         for m, analysis in results.items():
             effect_sizes.append(analysis['effect_size']['cohens_d'])
+            # Calculate approximate SE for Cohen's d
+            n1 = analysis['basic_stats']['control']['sample_size']
+            n2 = analysis['basic_stats']['treatment']['sample_size']
+            d = analysis['effect_size']['cohens_d']
+            se_d = np.sqrt((n1 + n2)/(n1 * n2) + d**2/(2*(n1 + n2 - 2)))
+            effect_errors.append(se_d)
             metrics_list.append(m)
         
-        plt.figure()
-        bars = plt.bar(metrics_list, effect_sizes)
+        # Create bar plot with error bars
+        bars = plt.bar(metrics_list, effect_sizes, yerr=effect_errors, capsize=5)
         
-        # Color bars based on effect size magnitude
+        # Color bars based on effect size magnitude and add confidence bands
         for bar, effect in zip(bars, effect_sizes):
             if abs(effect) < 0.2:
                 bar.set_color('lightgray')
@@ -191,13 +247,21 @@ class ABTestAnalyzer:
                 bar.set_color('darkblue')
         
         plt.axhline(y=0, color='black', linestyle='-', alpha=0.2)
-        plt.title("Effect Size Comparison Across Metrics")
+        plt.title("Effect Size Comparison with Confidence Intervals")
         plt.ylabel("Cohen's d")
         plt.xlabel("Metrics")
         
+        # Add interpretation guide
+        plt.axhline(y=0.2, color='gray', linestyle='--', alpha=0.3)
+        plt.axhline(y=0.5, color='gray', linestyle='--', alpha=0.3)
+        plt.axhline(y=0.8, color='gray', linestyle='--', alpha=0.3)
+        plt.text(len(metrics_list)-1, 0.2, 'Small Effect', ha='right', va='bottom')
+        plt.text(len(metrics_list)-1, 0.5, 'Medium Effect', ha='right', va='bottom')
+        plt.text(len(metrics_list)-1, 0.8, 'Large Effect', ha='right', va='bottom')
+        
         plt.xticks(rotation=45)
         
-        # Add value labels on top of bars
+        # Add value labels
         for bar in bars:
             height = bar.get_height()
             plt.text(bar.get_x() + bar.get_width()/2., height,
@@ -205,8 +269,9 @@ class ABTestAnalyzer:
                     ha='center', va='bottom')
         
         plt.tight_layout()
-        plt.savefig('effect_sizes.png', dpi=300, bbox_inches='tight')
+        plt.savefig('effect_sizes_enhanced.png', dpi=300, bbox_inches='tight')
         plt.close()
+
 
 def generate_sample_data(seed=42):
     """Generate sample AB test data for demonstration."""
@@ -229,6 +294,7 @@ def generate_sample_data(seed=42):
     
     return data
 
+
 if __name__ == "__main__":
     # Generate sample data
     data = generate_sample_data()
@@ -245,7 +311,7 @@ if __name__ == "__main__":
     
     # Run analysis and create visualizations
     results = analyzer.run_full_analysis()
-    analyzer.create_visualizations()
+    analyzer.create_enhanced_visualizations()
     
     # Print results
     for metric, analysis in results.items():
